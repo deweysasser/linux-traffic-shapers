@@ -1,0 +1,115 @@
+#!/bin/sh
+#
+# Traffic shaping script for maximising VoIP quality on bursty, busy links
+#
+# (c) Dan Shearer 2007 dan@shearer.org
+# Latest version http://shearer.org/Linux_Shaping_Template
+# Under the GPL version 3.0 or higher.
+#
+# Version 1.1
+#
+#  Note: This script uses tc from iproute2. It does not use tc filters (which
+#  would work) because the tc filter syntax is nasty. Instead you will need
+#  some iptables commands which are given at the end of the script BUT commented
+#  out. You should insert the fragment in the appropriate place in your firewall,
+#  or nothing will work.
+
+
+EXT=eth1          # Outbound network interface
+UPLINKRATE=1300   # Total outbound bandwidth, bits per second
+DOWNLINKRATE=9000 # Total inbound bandwidth -- keep this lower than actual,
+                  # to help with inbound queue management. See TCP drop behaviour below
+VOIPRATE=400      # Bandwidth guaranteed for voice, SIP and IAX Asterisk protocol
+RTRATE=400        # Bandwidth guaranteed for realtime-ish packets, such as small ssh
+                  # packets and any TCP control packets that are not piggybacked.
+OTHERRATE=500     # Anything else, eg long ssh (scp/sftp) packets, mail, etc.
+
+
+###############
+############### Transmit controls 
+###############
+
+# This does bandwidth shaping and priority queuing, without starving
+# any class of traffic of bandwidth. It also has the very beneficial
+# effect of fairly sharing connections of equal priority - for example
+# twenty wgets with no shaping have wildly varying download rates as first
+# one and then another gets in first. With shaping all downloads continue
+# at one constant rate.
+#
+# Documentation is widely spread, and some of it isn't accurate. The best
+# thing is to build a test rig and read the developers' documentation. These
+# are also helpful:
+#
+# http://lartc.org/howto/
+# http://luxik.cdi.cz/~devik/qos/htb/manual/userg.htm
+# http://www.tldp.org/HOWTO/ADSL-Bandwidth-Management-HOWTO/ (dated, good concepts)
+#
+# Warning! Check you are not using documentation that is specific to Linux 2.4. It is
+# close to but not the same as Linux 2.6. Good for most concepts, but not exactly
+# the same syntax or meaning.
+
+# We can only shape traffic that we are sending, not receiving.
+
+# Queues have Classes belonging to them. Filters put traffic in Classes.
+# Classes have priorities.
+# All notation of form a:b means queue discipline a and class b. A qdisc is
+# always labelled as a:0 or a: as an abbreviation. This is how a tree can be
+# specified. In an HTB tree, leaf nodes can borrow bandwidth from each other if
+# it is available, but they cannot borrow bandwidth underneath another root.
+
+# zerost - delete everything
+tc qdisc del dev $EXT root
+
+# This is the root HTB queue discipline, and defines the default priority to any
+# traffic that isn't covered by a class statement below. You also need at
+# least one discipline, because disciplines are how classes enforce their
+# policies. The number 1 is a label to refer to this qdisc later.
+# There can only be one qdisc per interface.
+#
+# Study the diagram at http://lartc.org/howto/lartc.qdisc.classful.html in 9.5.2.1 carefully.
+
+tc qdisc add dev $EXT root handle 1: htb default 10
+
+# First - prevent queues forming on uplink
+ip link set dev $EXT qlen 100  
+# Way lower than default of 100. So we have all queues, with none on modem
+
+# Create root class. This has total bandwidth.
+tc class add dev $EXT parent 1:  classid 1:1 htb rate \
+  "$UPLINKRATE"kbit ceil "$UPLINKRATE"kbit
+
+# VoIP data - this is a nailed-up data rate. If no voicecalls, bandwidth still reserved.
+tc class add dev $EXT parent 1:1 classid 1:10 htb rate \
+  "$VOIPRATE"kbit ceil "$UPLINKRATE"kbit prio 1 burst 3k
+
+tc class add dev $EXT parent 1:1  classid 1:20 htb rate \
+  "$RTRATE"kbit  ceil "$RTRATE"kbit prio 2 burst 2k
+
+# Other
+tc class add dev $EXT parent 1:1 classid 1:30 htb rate \
+  "$OTHERRATE"kbit ceil "$OTHERRATE"kbit prio 3 burst 2k
+
+# Now add queues to handle each class
+# VoIP is first in first out, ie fast as you can pls
+tc qdisc add dev $EXT parent 1:10 handle 10: pfifo
+# The others get stochastic fairness
+tc qdisc add dev $EXT parent 1:20 handle 20: sfq perturb 10
+tc qdisc add dev $EXT parent 1:30 handle 30: sfq perturb 10 
+# (perturb 10 cos the docs say this is the number to use??!
+
+###############
+############### Receive controls
+###############
+
+# Following verbatim from just about all shaper scripts. This bit seems
+# difficult to do in any other way. NOTE! If you make a mistake with the
+# handle name, eg 1: instead of ffff: as per below, then you'll have a
+# very mysteriously not-working script.
+
+tc qdisc del dev $EXT handle ffff: ingress # delete it, with any filters
+tc qdisc add dev $EXT handle ffff: ingress
+
+# filter *TCP*, drop TCP coming in too fast:
+
+tc filter add dev $EXT parent ffff: protocol ip prio 50 u32 match ip src \
+   0.0.0.0/0 police rate ${DOWNLINKRATE}kbit burst 10k drop flowid :1
