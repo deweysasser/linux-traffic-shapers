@@ -1,0 +1,202 @@
+
+#!/bin/bash
+#
+# Linux Traffic Shaper Script (LTSS) version 0.1 beta (5/27/04)
+# ----------------------------------------------------------------------------------        ------
+ *---------
+# (c) Copyright 2004, Matt Goebel (mlg9000(Errr...at)yahoo(dot)com)
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+# Credit:
+# ----------------------------------------------------------------------------------        ------
+ *---------
+# Daniel Leaberry's tcstart script
+# Wondershaper 1.1a
+# knowplace.org and the narc firewall
+#
+# Purpose / Function:
+# ----------------------------------------------------------------------------------        ------
+ *---------
+# This script was written to provide traffic shaping for my own personal LAN's cable Inter
+ *net
+# connection. It ensures that regular network traffic does not interfere with my VOIP serv
+ *ice.
+# (Vonage.com) It also prioritizes other forms of interactive traffic so that uploads do n
+ *ot have as
+# big an impact on them as they otherwise would.  Only upstream traffic is shaped as downs
+ *tream traffic
+# is largely beyond our control.  At the moment this is a very simple script.  In the
+# future it's functionality may be expanded upon and improved.  If you find this script us
+ *eful,
+# if you find any errors, or you have suggestions on ways to improve it, please let me kno
+ *w.
+#
+# Prerequisites:
+# ----------------------------------------------------------------------------------        ------
+ *---------
+# 1. A modern Linux kernel /w HTB (http://luxik.cdi.cz/~devik/qos/htb/index2.htm) support
+ *enabled
+#    and the Netfilter module ipt_CLASSIFY.ko available (ipt_CLASSIFY.o for 2.4 kernels)
+# 2. iproute /w tc that supports HTB
+# 3. ipchains with CLASSIFY support (specifically libipt_CLASSIFY.so must be included)
+# 4. A VOIP router from any provider, or VOIP software
+#
+# Usage:
+# ----------------------------------------------------------------------------------        ------
+ *---------
+# Start the script - "ltss start"
+# Stop the script - "ltss stop"
+# Restart the script - "ltss restart"
+# Show the Status - "ltss status"
+#
+# Note: Check your firewall rules to be sure this does not conflict with the rules set the
+ *re
+#
+# Tested and known to work on (let me know so I can add these):
+# - Fedora Core 2 (stock kernel, out of the box no special steps required)
+#
+# Installation:
+# ----------------------------------------------------------------------------------        ------
+ *---------
+# 1. Modify the listed variables below to match your needs
+# 2. Make this script executable and owned by root (chown root:root ltss, chmod 700 ltss)
+# 3. Place this script in your start files (Optional)
+#
+# Variables (change these as needed):
+# ----------------------------------------------------------------------------------        ------
+ *---------
+
+TC=/usr/sbin/tc             # Path to the tc command
+IPTABLES=/usr/sbin/iptables # Path to the iptables command
+UPSTREAM="450Kbit"      # Tweak this as needed (~90% total upload bandwidth is a good star
+ *t)
+EXTINT="eth0"           # External Interface
+VOIP1="5060:5061"       # First port (or range) used by VOIP (UDP)
+VOIP2="10000:20000"     # Second port range used by VOIP (Optional UDP - required for Vona
+ *ge)
+FPRIORITY="200Kbit"     # VOIP bandwidth req. (2x max bandwidth required for highest quali
+ *ty call, used for 3 way calling)
+SPRIORITY="150Kbit"     # Interactive and other higher priority bandwidth req.
+LASTPRIORITY="100Kbit"  # Everything else (should be the rest of the bandwidth you have le
+ *ft)
+HP="domain,http,pop3,imap,https,imaps,ftp"  # TCP Traffic you want to give priority to (SS
+ *H already included
+HPTCP=""                # Other TCP traffic you want to give priority to (Port or Range of
+ * Ports)
+HPUDP="53"                # Other UDP traffic you want to give priority to (Port or Range
+ *of Ports)
+
+# Script portion (should not need modification):
+# ----------------------------------------------------------------------------------        ------
+ *---------
+
+if [ "$1" == "start" ] || [ "$1" == "restart" ] || [ "$1" == "stop" ]; then
+        # Flush everything
+        $TC qdisc del dev $EXTINT root 2> /dev/null > /dev/null
+        fi
+if [ "$1" == "start" ] || [ "$1" == "restart" ]; then
+        # Start Traffic Shaper
+        if [ "$1" == "start" ]; then
+                echo "Starting Traffic Shaper........"
+                fi
+        if [ "$1" == "restart" ]; then
+                echo "Restarting Traffic Shaper........"
+                fi
+        # Load CLASSIFY module
+        modprobe ipt_CLASSIFY
+        # Setup classes
+        $TC qdisc add dev $EXTINT root handle 1: htb default 12 r2q 3
+        $TC class add dev $EXTINT parent 1: classid 1:1 htb rate $UPSTREAM
+        $TC class add dev $EXTINT parent 1:1 classid 1:10 htb rate $FPRIORITY ceil $UPSTRE
+ *AM prio 0
+        $TC class add dev $EXTINT parent 1:1 classid 1:11 htb rate $SPRIORITY ceil $UPSTRE
+ *AM prio 1
+        $TC class add dev $EXTINT parent 1:1 classid 1:12 htb rate $LASTPRIORITY ceil $UPS
+ *TREAM prio 2
+        $TC qdisc add dev $EXTINT parent 1:10 handle 10: sfq perturb 10
+        $TC qdisc add dev $EXTINT parent 1:11 handle 11: sfq perturb 10
+        $TC qdisc add dev $EXTINT parent 1:12 handle 12: sfq perturb 10
+        # VOIP traffic
+        iptables -t mangle -A POSTROUTING -o $EXTINT -p udp --dport $VOIP1 -j CLASSIFY --s
+ *et-class 1:10
+        if [ "$VOIP2" != "" ]; then
+                iptables -t mangle -A POSTROUTING -o $EXTINT -p udp --dport $VOIP2 -j CLAS
+ *SIFY --set-class 1:10
+                fi
+        # Setup secondary traffic
+        # Give "overhead" packets priority
+        iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp --syn -m length --length 40:68
+ * -j CLASSIFY --set-class 1:11
+        iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp --tcp-flags ALL SYN,ACK -m len
+ *gth --length 40:68 -j CLASSIFY --set-class 1:11
+        iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp --tcp-flags ALL ACK -m length
+ *--length 40:100 -j CLASSIFY --set-class 1:11
+        iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp --tcp-flags ALL RST -j CLASSIF
+ *Y --set-class 1:11
+        iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp --tcp-flags ALL ACK,RST -j CLA
+ *SSIFY --set-class 1:11
+        iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp --tcp-flags ALL ACK,FIN -j CLA
+ *SSIFY --set-class 1:11
+        # Interactive SSH traffic
+        iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp --sport ssh -m length --length
+ * 40:100 -j CLASSIFY --set-class 1:11
+        iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp --dport ssh -m length --length
+ * 40:100 -j CLASSIFY --set-class 1:11
+        # Interactive traffic
+        if [ "$HP" != "" ]; then
+                iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp -m multiport --dport $
+ *HP -j CLASSIFY --set-class 1:11
+                fi
+        # improve ICMP results
+        tc filter add dev $EXTINT parent 1:0 protocol ip prio 10 u32 \
+               match ip protocol 1 0xff flowid 1:10
+
+        # Other TCP/UDP traffic
+        if [ "$HPTCP" != "" ]; then
+                iptables -t mangle -A POSTROUTING -o $EXTINT -p tcp -m multiport --dport $
+ *HPTCP -j CLASSIFY --set-class 1:11
+                fi
+        if [ "$HPUDP" != "" ]; then
+                iptables -t mangle -A POSTROUTING -o $EXTINT -p udp -m multiport --dport $
+ *HPUDP -j CLASSIFY --set-class 1:11
+                fi
+        echo "Done."
+        exit 0
+        fi
+if [ "$1" == "stop" ]; then
+        # Stop Traffic Shaper
+        echo "Stopping Traffic Shaper........"
+        echo "Done."
+        exit 0
+        fi
+if [ "$1" == "status" ]; then
+        # Show Status
+        echo "Current Traffic Shaper Status:"
+        echo "---------------------------------------------------------------------------"
+        tc -s qdisc ls dev $EXTINT
+        tc -s class ls dev $EXTINT
+        exit 0
+        fi
+if [ "$1" != "start" ] && [ "$1" != "restart" ] && [ "$1" != "stop" ] && [ "$1" != "status
+ *" ]; then
+        echo "Bad or missing parameters"
+        echo "Usage: { start | stop | restart | status }"
+        echo "start          = Start traffic shaper"
+        echo "stop           = Stop traffic shaper"
+        echo "restart        = Restart traffic shaper"
+        echo "status         = Show status of traffic shaper"
+        exit 1
+        fi
