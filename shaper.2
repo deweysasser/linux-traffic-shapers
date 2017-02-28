@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # Traffic shaping script for maximising VoIP quality on bursty, busy links
 #
@@ -16,8 +16,8 @@
 
 
 EXT=eth1          # Outbound network interface
-UPLINKRATE=1300   # Total outbound bandwidth, bits per second
-DOWNLINKRATE=9000 # Total inbound bandwidth -- keep this lower than actual,
+UPLINKRATE=4800   # Total outbound bandwidth, bits per second
+DOWNLINKRATE=58000 # Total inbound bandwidth -- keep this lower than actual,
                   # to help with inbound queue management. See TCP drop behaviour below
 VOIPRATE=400      # Bandwidth guaranteed for voice, SIP and IAX Asterisk protocol
 RTRATE=400        # Bandwidth guaranteed for realtime-ish packets, such as small ssh
