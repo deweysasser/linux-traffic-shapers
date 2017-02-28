@@ -60,6 +60,10 @@ OTHERRATE=500     # Anything else, eg long ssh (scp/sftp) packets, mail, etc.
 # zerost - delete everything
 tc qdisc del dev $EXT root
 
+if [ "$1" == "off" -o "$1" == "stop" ] ; then
+	exit
+fi
+
 # This is the root HTB queue discipline, and defines the default priority to any
 # traffic that isn't covered by a class statement below. You also need at
 # least one discipline, because disciplines are how classes enforce their
